@@ -1,0 +1,9 @@
+streamlit
+ezdxf
+matplotlib
+numpy
+openai
+python-dotenv
+Pillow
+gradio_client
+PyMuPDF
