@@ -620,12 +620,19 @@ except Exception as e:
     st.session_state.llm_client_ready = False
 
 # Initialize Gradio Client (from SVG_Converter.py)
-try:
-    gradio_client = Client("openfree/image-to-vector")
-    st.session_state.gradio_client_ready = True
-except Exception as e:
-    st.error("Failed to initialize vectorization services. Please check your internet connection or try again later.")
-    st.session_state.gradio_client_ready = False
+# Initialize Gradio Client (from SVG_Converter.py)
+@st.cache_resource
+def get_gradio_client():
+    try:
+        client = Client("openfree/image-to-vector")
+        st.session_state.gradio_client_ready = True
+        return client
+    except Exception as e:
+        st.error("Failed to initialize vectorization services. Please check your internet connection or try again later.")
+        st.session_state.gradio_client_ready = False
+        return None # Return None if initialization fails
+
+gradio_client = get_gradio_client()
 
 # --- Helper Functions ---
 
