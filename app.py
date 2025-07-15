@@ -1377,7 +1377,15 @@ def raster_to_vector_section():
 
 def main():
     # --- Full-width Fixed Navbar ---
-    st.markdown('<div class="navbar">TAILAI</div>', unsafe_allow_html=True)
+    st.markdown(
+    """
+    <div class="navbar">
+        <img src="https://github.com/Tailailabs/TAILAI_CAD_Analyzer/blob/main/Tailai_LOGO.jpeg?raw=true" 
+             alt="TAILAI Logo" 
+             style="height: 40px; margin-right: 10px; border-radius: 5px;">
+        </div>
+    """, 
+    unsafe_allow_html=True)
 
     # --- Horizontal Radio for Navigation ---
     nav_option = st.radio(
@@ -1410,7 +1418,7 @@ def main():
 
 
     # --- Optional Footer (Uncomment if needed) ---
-    # st.markdown("<div class='footer'>© 2025 TAILAI LABS PVT LTD. All rights reserved.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='footer'>© 2025 TAILAI LABS PVT LTD. All rights reserved.</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
