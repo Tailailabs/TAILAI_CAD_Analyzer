@@ -620,19 +620,25 @@ except Exception as e:
     st.session_state.llm_client_ready = False
 
 # Initialize Gradio Client (from SVG_Converter.py)
-# Initialize Gradio Client (from SVG_Converter.py)
 @st.cache_resource
 def get_gradio_client():
     try:
         client = Client("openfree/image-to-vector")
-        st.session_state.gradio_client_ready = True
+        # Removed st.session_state modification from here
         return client
     except Exception as e:
-        st.error("Failed to initialize vectorization services. Please check your internet connection or try again later.")
-        st.session_state.gradio_client_ready = False
+        # Error message will be handled outside this function
         return None # Return None if initialization fails
 
 gradio_client = get_gradio_client()
+
+# Update session state based on whether client initialization was successful
+if gradio_client is not None:
+    st.session_state.gradio_client_ready = True
+else:
+    st.session_state.gradio_client_ready = False
+    st.error("Failed to initialize vectorization services. Please check your internet connection or try again later.")
+
 
 # --- Helper Functions ---
 
@@ -793,14 +799,11 @@ def plot_dxf_drawing(msp):
                     ax.text(insert_point.x, insert_point.y, insert_point.z, text_content, color=color, fontsize=10, weight='bold')
                 else:
                     ax.text(insert_point.x, insert_point.y, text_content, color=color, fontsize=10, weight='bold')
-                
                 min_x, max_x = min(min_x, insert_point.x), max(max_x, insert_point.x)
                 min_y, max_y = min(min_y, insert_point.y), max(max_y, insert_point.y)
                 min_z, max_z = min(min_z, insert_point.z), max(max_z, insert_point.z)
                 plotted_entities_count += 1
-            
             entity_counts[etype] += 1
-
         except Exception as ex:
             st.warning(f"Skipping entity {etype} due to plotting error: {ex}")
             continue
@@ -813,579 +816,341 @@ def plot_dxf_drawing(msp):
         bbox_width = max_x - min_x
         bbox_height = max_y - min_y
         bbox_depth = max_z - min_z if has_3d else 0
-        visualization_summary_parts.append(f"The drawing spans from approximately ({min_x:.1f}, {min_y:.1f}{f', {min_z:.1f}' if has_3d else ''}) to ({max_x:.1f}, {max_y:.1f}{f', {max_z:.1f}' if has_3d else ''}).")
-        visualization_summary_parts.append(f"Overall dimensions are approximately Width: {bbox_width:.1f}, Height: {bbox_height:.1f}{f', Depth: {bbox_depth:.1f}' if has_3d else ''}.")
-    else:
-        visualization_summary_parts.append("No bounding box could be determined for the visualized entities.")
 
+        visualization_summary_parts.append(f"The drawing spans from X: {min_x:.2f} to {max_x:.2f}, Y: {min_y:.2f} to {max_y:.2f}")
+        if has_3d:
+            visualization_summary_parts.append(f", and Z: {min_z:.2f} to {max_z:.2f}.")
+        else:
+            visualization_summary_parts.append(".")
+
+        # Set equal aspect ratio
+        if has_3d:
+            max_range = np.array([bbox_width, bbox_height, bbox_depth]).max()
+            mid_x = (min_x + max_x) * 0.5
+            mid_y = (min_y + max_y) * 0.5
+            mid_z = (min_z + max_z) * 0.5 if has_3d else 0
+
+            ax.set_xlim(mid_x - max_range, mid_x + max_range)
+            ax.set_ylim(mid_y - max_range, mid_y + max_range)
+            ax.set_zlim(mid_z - max_range, mid_z + max_range)
+        else:
+            ax.set_aspect('equal', adjustable='box')
+            ax.autoscale_view()
+
+    ax.set_title("DXF Drawing Visualization", fontsize=16, color='#1f2937')
+    ax.set_xlabel("X-axis", color='#374151')
+    ax.set_ylabel("Y-axis", color='#374151')
     if has_3d:
-        visualization_summary_parts.append("The visualization is a 3D plot.")
-        ax.set_xlabel('X-axis', color='#374151')
-        ax.set_ylabel('Y-axis', color='#374151')
-        ax.set_zlabel('Z-axis', color='#374151')
-        ax.tick_params(axis='x', colors='#374151')
-        ax.tick_params(axis='y', colors='#374151')
-        ax.tick_params(axis='z', colors='#374151')
-    else:
-        visualization_summary_parts.append("The visualization is a 2D plot.")
-        ax.set_xlabel('X-axis', color='#374151')
-        ax.set_ylabel('Y-axis', color='#374151')
-        ax.tick_params(axis='x', colors='#374151')
-        ax.tick_params(axis='y', colors='#374151')
+        ax.set_zlabel("Z-axis", color='#374151')
+    
+    # Grid and ticks
+    ax.grid(True, linestyle='--', alpha=0.6)
+    
+    # Improve tick visibility
+    ax.tick_params(axis='x', colors='#4b5563')
+    ax.tick_params(axis='y', colors='#4b5563')
+    if has_3d:
+        ax.tick_params(axis='z', colors='#4b5563')
 
-    entity_viz_counts = ", ".join([f"{count} {etype.lower()}(s)" for etype, count in entity_counts.items()])
-    if entity_viz_counts:
-        visualization_summary_parts.append(f"It visually represents: {entity_viz_counts}.")
-    else:
-        visualization_summary_parts.append("No geometric entities were visualized.")
+    # Create a BytesIO object to save the figure
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.1, dpi=300)
+    buf.seek(0)
+    plt.close(fig) # Close the figure to free up memory
 
-    plt.title("DXF Geometry Visualization", fontsize=16, color='#1f2937', weight='bold')
-    plt.grid(True, linestyle='--', alpha=0.7, color='#e2e8f0') # Lighter grid
-    plt.tight_layout()
-    return fig, " ".join(visualization_summary_parts)
+    for etype, count in entity_counts.items():
+        visualization_summary_parts.append(f"{count} {etype}s")
 
-def generate_llm_summary(msp, entity_summary, visualization_description):
-    """Generates a professional summary of the DXF drawing using the LLM."""
+    visualization_description = "The visualization displays various entities found in the DXF file. " + \
+                                ", ".join(visualization_summary_parts) + \
+                                " This visual helps in understanding the layout and components of the CAD drawing."
+
+    return buf, visualization_description
+
+def get_llm_response(prompt):
+    """Fetches a response from the LLM based on the given prompt."""
     if not st.session_state.llm_client_ready:
-        return "AI services are not available. Cannot generate summary."
-
-    geom = "\n".join([f"- {k}: {v}" for k, v in entity_summary.items()])
-
-    annots = ""
-    for e in msp:
-        if e.dxftype() in ['TEXT', 'MTEXT']:
-            annots += f"- '{e.dxf.text}' at ({e.dxf.insert.x:.2f}, {e.dxf.insert.y:.2f})\n"
-    if not annots:
-        annots = "No text annotations found."
-
-    prompt = f"""
-You are a highly experienced CAD expert and analyst. Your task is to provide a comprehensive, professional summary of a DXF drawing.
-Consider the following information:
-
-1.  **Geometric Entity Breakdown:**
-    {geom}
-
-2.  **Text Annotations/Labels:**
-    {annots}
-
-3.  **Visual Characteristics (from Visualization):**
-    {visualization_description if visualization_description else 'No geometric visualization could be generated for this drawing, possibly due to a lack of plottable entities.'}
-
-Based on the above data, generate a professional summary describing:
--   What the drawing most likely represents (e.g., a mechanical part, an architectural floor plan, an electrical schematic, an electrical schematic, a site layout).
--   Its key features, components, or design elements.
--   Any notable dimensions, patterns, or arrangements inferred from the entity types and their quantities.
--   If it's 3D, mention its spatial nature.
--   If there are text annotations, integrate their meaning into the summary.
--   Keep the summary concise yet informative, suitable for an engineering or design review.
-"""
-    with st.spinner("Generating AI summary... This may take a moment."):
-        try:
-            response = llm_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": "You are a CAD expert providing professional summaries of DXF drawings."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.5,
-                max_tokens=500
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            return f"AI Summary Generation Failed: {e}"
-
-def generate_chatbot_response(user_question, entity_summary, layers, visualization_description, chat_history):
-    """Generates a chatbot response using the LLM based on the current DXF context."""
-    if not st.session_state.llm_client_ready:
-        return "AI services are not available. Cannot respond."
-
-    context_prompt = f"""
-Current DXF Context:
-- Entity Summary: {dict(entity_summary)}
-- Layers: {list(layers)}
-- Visualization Description: {visualization_description if visualization_description else 'No geometric visualization available for context.'}
-- User Question: {user_question}
-
-Based on the provided DXF context, answer the user's question concisely and helpfully.
-If the question cannot be answered from the provided DXF data, state that.
-"""
-    messages_for_llm = chat_history + [{"role": "user", "content": context_prompt}]
-
-    with st.spinner("Bot thinking..."):
-        try:
-            response = llm_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=messages_for_llm,
-                temperature=0.7,
-                max_tokens=200
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            return f"Chatbot Error: {e}"
-
-def extract_image_from_pdf(pdf_file):
-    """Extracts the first page as an image from a PDF file-like object."""
-    doc = None
+        return "AI services are not available. Please ensure GROQ_API_KEY is set."
+    
     try:
-        pdf_bytes = pdf_file.read()
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        if not doc.page_count == 1:
-            st.warning("PDF contains more than one page. Only the first page will be processed.")
+        st.session_state.chat_history.append({"role": "user", "content": prompt})
+        
+        # Filter chat history to only include system, user, and assistant roles
+        # Ensure only the last few relevant turns are sent if history becomes too long
+        relevant_history = []
+        # Keep initial system message
+        if st.session_state.chat_history and st.session_state.chat_history[0]["role"] == "system":
+            relevant_history.append(st.session_state.chat_history[0])
+        
+        # Add a few recent user/assistant messages to maintain context
+        # Adjust this number based on typical conversation length and token limits
+        recent_messages = [msg for msg in st.session_state.chat_history if msg["role"] in ["user", "assistant"]][-5:] 
+        relevant_history.extend(recent_messages)
 
-        page = doc.load_page(0)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # Render at 2x resolution
 
-        img_data = pix.tobytes("png")
-        image = Image.open(io.BytesIO(img_data))
-        return image
+        chat_completion = llm_client.chat.completions.create(
+            messages=relevant_history,
+            model="llama3-8b-8192", # Or another suitable model
+            temperature=0.7,
+            max_tokens=1024,
+            top_p=1,
+            stream=False,
+            stop=None,
+        )
+        response = chat_completion.choices[0].message.content
+        st.session_state.chat_history.append({"role": "assistant", "content": response})
+        return response
     except Exception as e:
-        st.error(f"Error extracting image from PDF. Please ensure it's a valid PDF.")
-        return None
-    finally:
-        if doc:
-            doc.close()
-
-def convert_image_to_svg(image_pil):
-    """Converts a PIL Image to SVG using the Hugging Face Gradio API."""
-    if not st.session_state.gradio_client_ready:
-        st.error("Vectorization services are not available. Cannot convert to SVG.")
-        return None
-
-    temp_image_path = None
-    temp_svg_from_api_path = None
-    svg_string = None
-
-    with st.spinner("Converting image to SVG... This may take a moment."):
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
-                temp_image_path = temp_file.name
-                image_pil.save(temp_image_path)
-
-            result = gradio_client.predict(
-                image=handle_file(temp_image_path),
-                colormode="color", hierarchical="stacked", mode="spline",
-                filter_speckle=4, color_precision=6, layer_difference=16,
-                corner_threshold=60, length_threshold=4, max_iterations=10,
-                splice_threshold=45, path_precision=3,
-                api_name="/convert_to_vector_1"
-            )
-
-            if isinstance(result, tuple) and len(result) > 1 and isinstance(result[1], str) and os.path.exists(result[1]):
-                temp_svg_from_api_path = result[1]
-                with open(temp_svg_from_api_path, "r") as f:
-                    svg_string = f.read()
-            elif isinstance(result, str):
-                svg_string = result
-            elif isinstance(result, list) and len(result) > 0 and isinstance(result[0], str):
-                svg_string = result[0]
-            else:
-                st.error("SVG conversion failed: Unexpected response from conversion service.")
-                return None
-
-            if svg_string:
-                st.success("Image successfully converted to SVG!")
-                return svg_string
-            else:
-                st.error("SVG conversion failed: No SVG content received.")
-                return None
-
-        except Exception as e:
-            st.error(f"Error during SVG conversion. Please ensure the image is valid and try again.")
-            return None
-        finally:
-            if temp_image_path and os.path.exists(temp_image_path):
-                os.remove(temp_image_path)
-            if temp_svg_from_api_path and os.path.exists(temp_svg_from_api_path):
-                os.remove(temp_svg_from_api_path)
-
-def convert_svg_to_dxf(svg_content):
-    """Converts SVG content to DXF using ezdxf."""
-    if ezdxf is None:
-        st.error("The 'ezdxf' library is not available. Cannot export to DXF. Please ensure it's installed.")
-        return None
-
-    temp_dxf_path = None
-    dxf_bytes = None
-
-    with st.spinner("Exporting SVG to DXF..."):
-        try:
-            doc = ezdxf.new("R2010")
-            msp = doc.modelspace()
-            root = ET.fromstring(svg_content)
-            svg_ns = "{http://www.w3.org/2000/svg}"
-
-            # Basic parsing for <path> elements
-            for path_element in root.findall(f".//{svg_ns}path"):
-                d_attr = path_element.get("d")
-                if d_attr:
-                    points = []
-                    current_x, current_y = 0.0, 0.0
-                    path_commands = d_attr.replace(',', ' ').split()
-
-                    i = 0
-                    while i < len(path_commands):
-                        command = path_commands[i]
-                        i += 1
-
-                        if command == 'M' or command == 'm':
-                            x = float(path_commands[i])
-                            y = float(path_commands[i+1])
-                            i += 2
-                            if command == 'm':
-                                current_x += x
-                                current_y += y
-                            else:
-                                current_x = x
-                                current_y = y
-                            if points:
-                                msp.add_lwpolyline(points)
-                                points = []
-                            points.append((current_x, current_y))
-
-                        elif command == 'L' or command == 'l':
-                            x = float(path_commands[i])
-                            y = float(path_commands[i+1])
-                            i += 2
-                            if command == 'l':
-                                current_x += x
-                                current_y += y
-                            else:
-                                current_x = x
-                                current_y = y
-                            points.append((current_x, current_y))
-
-                        elif command == 'H' or command == 'h':
-                            val = float(path_commands[i])
-                            i += 1
-                            if command == 'h':
-                                current_x += val
-                            else:
-                                current_x = val
-                            points.append((current_x, current_y))
-
-                        elif command == 'V' or command == 'v':
-                            val = float(path_commands[i])
-                            i += 1
-                            if command == 'v':
-                                current_y += val
-                            else:
-                                current_y = val
-                            points.append((current_x, current_y))
-
-                        elif command == 'Z' or command == 'z':
-                            if points:
-                                if points[0] != points[-1]:
-                                    points.append(points[0])
-                                msp.add_lwpolyline(points, close=True)
-                                points = []
-                        else:
-                            while i < len(path_commands) and (path_commands[i][0].isdigit() or path_commands[i][0] == '-' or path_commands[i][0] == '.'):
-                                i += 1
-
-                    if points:
-                        msp.add_lwpolyline(points)
-
-            # Handle <rect> elements
-            for rect_element in root.findall(f".//{svg_ns}rect"):
-                x = float(rect_element.get('x', 0))
-                y = float(rect_element.get('y', 0))
-                width = float(rect_element.get('width', 0))
-                height = float(rect_element.get('height', 0))
-                if width > 0 and height > 0:
-                    points = [
-                        (x, y),
-                        (x + width, y),
-                        (x + width, y + height),
-                        (x, y + height),
-                        (x, y)
-                    ]
-                    msp.add_lwpolyline(points, close=True)
-
-            # Handle <circle> elements
-            for circle_element in root.findall(f".//{svg_ns}circle"):
-                cx = float(circle_element.get('cx', 0))
-                cy = float(circle_element.get('cy', 0))
-                r = float(circle_element.get('r', 0))
-                if r > 0:
-                    msp.add_circle((cx, cy), r)
-
-            # Handle <ellipse> elements
-            for ellipse_element in root.findall(f".//{svg_ns}ellipse"):
-                cx = float(ellipse_element.get('cx', 0))
-                cy = float(ellipse_element.get('cy', 0))
-                rx = float(ellipse_element.get('rx', 0))
-                ry = float(ellipse_element.get('ry', 0))
-                if rx > 0 and ry > 0:
-                    msp.add_ellipse(center=(cx, cy), major_axis=(rx, 0), ratio=ry/rx)
-
-            # Handle <line> elements
-            for line_element in root.findall(f".//{svg_ns}line"):
-                x1 = float(line_element.get('x1', 0))
-                y1 = float(line_element.get('y1', 0))
-                x2 = float(line_element.get('x2', 0))
-                y2 = float(line_element.get('y2', 0))
-                msp.add_line((x1, y1), (x2, y2))
-
-            # Handle <polyline> elements
-            for polyline_element in root.findall(f".//{svg_ns}polyline"):
-                points_str = polyline_element.get('points', '')
-                if points_str:
-                    points = []
-                    for pair in points_str.split():
-                        coords = pair.split(',')
-                        if len(coords) == 2:
-                            points.append((float(coords[0]), float(coords[1])))
-                    if points:
-                        msp.add_lwpolyline(points)
-
-            # Handle <polygon> elements
-            for polygon_element in root.findall(f".//{svg_ns}polygon"):
-                points_str = polygon_element.get('points', '')
-                if points_str:
-                    points = []
-                    for pair in points_str.split():
-                        coords = pair.split(',')
-                        if len(coords) == 2:
-                            points.append((float(coords[0]), float(coords[1])))
-                    if points:
-                        msp.add_lwpolyline(points, close=True)
-
-            # Handle <text> elements
-            for text_element in root.findall(f".//{svg_ns}text"):
-                x = float(text_element.get('x', 0))
-                y = float(text_element.get('y', 0))
-                text_content = text_element.text or ""
-                font_size = float(text_element.get('font-size', '12').replace('px', ''))
-                msp.add_text(text_content, dxfattribs={
-                    'height': font_size,
-                    'insert': (x, y),
-                    'halign': 0,
-                    'valign': 0
-                })
-
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as temp_dxf_file:
-                temp_dxf_file.write(doc.getvalue().encode('utf-8')) # Save DXF content to bytes
-                temp_dxf_path = temp_dxf_file.name
-
-            with open(temp_dxf_path, "rb") as f:
-                dxf_bytes = f.read()
-
-            st.success("SVG successfully exported to DXF!")
-            return dxf_bytes
-
-        except ET.ParseError as e:
-            st.error(f"DXF export failed: The SVG content is malformed or contains unsupported features.")
-            return None
-        except Exception as e:
-            st.error(f"An error occurred during DXF export. Ensure the SVG content is suitable for DXF conversion.")
-            return None
-        finally:
-            if temp_dxf_path and os.path.exists(temp_dxf_path):
-                os.remove(temp_dxf_path)
-
-# --- Streamlit UI Functions ---
+        return f"Error communicating with AI: {e}. Please try again."
 
 def cad_analyzer_section():
-    """Renders the CAD Drawing Analyzer section."""
-    st.markdown("<h3 class='section-header'>🛠️ CAD Drawing Analyzer</h3>", unsafe_allow_html=True)
-    st.markdown("Upload a DXF file to analyze its entities, layers, visualize its geometry, and get an AI-powered summary and chat support.")
+    """Handles the CAD Drawing Analyzer functionality."""
+    st.markdown("<h2 class='section-header'>📐 CAD Drawing Analyzer</h2>", unsafe_allow_html=True)
+    st.write("Upload a DXF file to analyze its structure, visualize entities, and chat with an AI assistant about its content.")
 
     uploaded_file = st.file_uploader("Upload DXF File", type=["dxf"], key="dxf_uploader")
 
     if uploaded_file is not None:
-        temp_file_path = None
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as temp_file:
-                temp_file.write(uploaded_file.read())
-                temp_file_path = temp_file.name
+            # Check if a new file is uploaded or if 'doc' is not in session_state
+            # or if the current uploaded file name is different from the last processed one.
+            if uploaded_file.name != st.session_state.uploaded_file_name or st.session_state.doc is None:
+                # Save uploaded file to a temporary location
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_file:
+                    tmp_file.write(uploaded_file.getvalue())
+                    tmp_path = tmp_file.name
 
-            doc = ezdxf.readfile(temp_file_path)
-            msp = doc.modelspace()
+                st.session_state.doc = ezdxf.readfile(tmp_path)
+                st.session_state.msp = st.session_state.doc.modelspace()
+                
+                # Clear chat history for new file
+                st.session_state.chat_history = [{"role": "system", "content": "You are a helpful CAD assistant. Respond concisely and accurately based on the provided DXF data."}]
+                st.session_state.uploaded_file_name = uploaded_file.name # Store the name of the newly processed file
 
-            st.session_state.doc = doc
-            st.session_state.msp = msp
-            st.session_state.entity_summary, st.session_state.layers = get_entity_summary(msp)
-            st.session_state.visualization_description = ""
-            st.session_state.chat_history = []  # No system message
+                # Perform initial analysis
+                entity_summary, layers = get_entity_summary(st.session_state.msp)
+                st.session_state.entity_summary = entity_summary
+                st.session_state.layers = layers
 
-            st.success(f"Successfully loaded DXF file: **{uploaded_file.name}**")
-
-            st.markdown("<h4 class='section-header'>📊 Entity Summary</h4>", unsafe_allow_html=True)
-            summary_text = "Entity Count:\n"
-            for k, v in st.session_state.entity_summary.items():
-                summary_text += f"- {k}: {v}\n"
-            st.code(summary_text, language="text")
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-                if st.button("🔍 View Entity Details", key="view_details_btn"):
-                    with st.expander("Detailed Entity Information", expanded=True):
-                        st.text_area("Details", get_entity_details(msp), height=300)
-
-            with col2:
-                if st.button("📄 Show Layers", key="show_layers_btn"):
-                    with st.expander("Layers in Drawing", expanded=True):
-                        if st.session_state.layers:
-                            st.write(", ".join(sorted(st.session_state.layers)))
-                        else:
-                            st.info("No layers found in the DXF file.")
-
-            st.markdown("<h4 class='section-header'>📈 Drawing Visualization</h4>", unsafe_allow_html=True)
-            if st.button("Visualize Drawing", key="visualize_btn"):
-                fig, viz_desc = plot_dxf_drawing(msp)
-                st.session_state.visualization_description = viz_desc
-                if fig:
-                    st.pyplot(fig)
-                    st.info("Drawing visualized.")
+                # Generate visualization
+                img_buffer, vis_desc = plot_dxf_drawing(st.session_state.msp)
+                if img_buffer:
+                    st.session_state.current_image_pil = Image.open(img_buffer)
+                    st.session_state.visualization_description = vis_desc
                 else:
-                    st.warning(viz_desc)
-                plt.close(fig)
+                    st.session_state.current_image_pil = None
+                    st.session_state.visualization_description = vis_desc # Store the error message
 
-            st.markdown("<h4 class='section-header'>🤖 AI-Powered Analysis</h4>", unsafe_allow_html=True)
-            if st.session_state.llm_client_ready:
-                if st.button("Generate AI Summary", key="llm_summary_btn"):
-                    summary = generate_llm_summary(
-                        msp,
-                        st.session_state.entity_summary,
-                        st.session_state.visualization_description
-                    )
-                    st.markdown("---")
-                    st.subheader("AI Summary:")
-                    st.write(summary)
-                    st.markdown("---")
+                os.remove(tmp_path) # Clean up the temporary file
+
+            st.success(f"DXF file '{uploaded_file.name}' loaded successfully!")
+
+            # Display sections
+            st.markdown("---")
+            st.markdown("<h3 class='sub-header'>Summary & Visualization</h3>", unsafe_allow_html=True)
+            col_summary, col_vis = st.columns([1, 2])
+
+            with col_summary:
+                st.markdown("#### Entity Summary:")
+                if st.session_state.entity_summary:
+                    for entity_type, count in st.session_state.entity_summary.items():
+                        st.write(f"- **{entity_type}**: {count}")
+                else:
+                    st.info("No entities found or unable to parse summary.")
+
+                st.markdown("#### Layers Found:")
+                if st.session_state.layers:
+                    for layer in sorted(list(st.session_state.layers)):
+                        st.write(f"- {layer}")
+                else:
+                    st.info("No layers found.")
+
+            with col_vis:
+                if st.session_state.current_image_pil:
+                    st.image(st.session_state.current_image_pil, caption="DXF Drawing Visualization", use_column_width=True)
+                    st.markdown(f"<p class='text-muted'>{st.session_state.visualization_description}</p>", unsafe_allow_html=True)
+                else:
+                    st.warning(st.session_state.visualization_description) # Display error if no image
+
+            st.markdown("---")
+            st.markdown("<h3 class='sub-header'>AI Assistant for CAD</h3>", unsafe_allow_html=True)
+
+            if not st.session_state.llm_client_ready:
+                st.warning("AI assistant is not available. Please ensure GROQ_API_KEY is set in your environment variables.")
             else:
-                st.warning("AI services not available. AI summary generation disabled.")
+                st.markdown(f"""
+                <div style="
+                    background-color: var(--bg-secondary); 
+                    border-radius: 12px; 
+                    padding: 1rem; 
+                    margin-bottom: 1rem; 
+                    border: 1px solid var(--border-color);
+                    box-shadow: var(--shadow-sm);
+                ">
+                    <small>Type your questions about the DXF file. Examples: "What are the dimensions of the lines?", "Count all circles", "Explain the purpose of Layer 'ABC'".</small>
+                </div>
+                """, unsafe_allow_html=True)
 
-            st.markdown("<h4 class='section-header'>💬 CAD Chatbot</h4>", unsafe_allow_html=True)
+                # Display chat messages from history on app rerun
+                for message in st.session_state.chat_history:
+                    if message["role"] != "system": # Don't display the system message
+                        with st.chat_message(message["role"]):
+                            st.markdown(message["content"])
 
-            for message in st.session_state.chat_history:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
-
-            if prompt := st.chat_input("Type your question here..."):
-                if not st.session_state.llm_client_ready:
-                    st.warning("AI services not available. Chatbot disabled.")
-                    st.session_state.chat_history.append({"role": "user", "content": prompt})
+                # React to user input
+                if prompt := st.chat_input("Ask about the DXF file..."):
                     with st.chat_message("user"):
                         st.markdown(prompt)
+
                     with st.chat_message("assistant"):
-                        st.markdown("Chatbot is currently unavailable.")
-                    return
-
-                st.session_state.chat_history.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-
-                bot_response = generate_chatbot_response(
-                    prompt,
-                    st.session_state.entity_summary,
-                    st.session_state.layers,
-                    st.session_state.visualization_description,
-                    st.session_state.chat_history
-                )
-                st.session_state.chat_history.append({"role": "assistant", "content": bot_response})
-                with st.chat_message("assistant"):
-                    st.markdown(bot_response)
+                        with st.spinner("Thinking..."):
+                            entity_details = get_entity_details(st.session_state.msp)
+                            context_prompt = f"The user has uploaded a DXF file. Here is a summary of its entities: {st.session_state.entity_summary}. Here are some details about individual entities:\n{entity_details}\n\nUser's question: {prompt}"
+                            full_response = get_llm_response(context_prompt)
+                            st.markdown(full_response)
 
         except ezdxf.DXFStructureError as e:
-            st.error("Error reading DXF file: The file might be corrupted or invalid. Please ensure it's a valid DXF.")
-            st.session_state.doc = None
+            st.error(f"Error reading DXF file: {e}. Please ensure it's a valid DXF format.")
+            st.session_state.doc = None # Clear invalid doc from state
             st.session_state.msp = None
+            st.session_state.current_image_pil = None
+            st.session_state.visualization_description = ""
             st.session_state.entity_summary = {}
             st.session_state.layers = set()
-            st.session_state.visualization_description = ""
-        except UnicodeDecodeError as e:
-            st.error("Encoding error while reading DXF file. The DXF file might contain unsupported characters. Please check the file's integrity.")
-            st.session_state.doc = None
-            st.session_state.msp = None
-            st.session_state.entity_summary = {}
-            st.session_state.layers = set()
-            st.session_state.visualization_description = ""
+            st.session_state.chat_history = [{"role": "system", "content": "You are a helpful CAD assistant. Respond concisely and accurately based on the provided DXF data."}]
+            st.session_state.uploaded_file_name = ""
+
         except Exception as e:
-            st.error(f"An unexpected error occurred while processing the DXF file: {e}. Please try a different DXF file or contact support.")
-            st.session_state.doc = None
+            st.error(f"An unexpected error occurred: {e}")
+            st.session_state.doc = None # Clear invalid doc from state
             st.session_state.msp = None
+            st.session_state.current_image_pil = None
+            st.session_state.visualization_description = ""
             st.session_state.entity_summary = {}
             st.session_state.layers = set()
-            st.session_state.visualization_description = ""
-        finally:
-            if temp_file_path and os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
+            st.session_state.chat_history = [{"role": "system", "content": "You are a helpful CAD assistant. Respond concisely and accurately based on the provided DXF data."}]
+            st.session_state.uploaded_file_name = ""
+
     else:
         st.info("Please upload a DXF file to get started with CAD analysis.")
 
 def raster_to_vector_section():
-    """Renders the Raster to Vector Converter section."""
-    st.markdown("<h3 class='section-header'>🖼️ Raster to Vector Converter</h3>", unsafe_allow_html=True)
-    st.markdown("Convert raster images (JPG, PNG) or single-page PDFs into scalable vector graphics (SVG) and then export them to DXF format.")
+    """Handles the Raster to Vector Converter functionality."""
+    st.markdown("<h2 class='section-header'>🖼️ Raster to Vector Converter</h2>", unsafe_allow_html=True)
+    st.write("Convert raster images (PNG, JPG) and PDF documents into editable vector formats like SVG and DXF.")
 
-    uploaded_file = st.file_uploader("Upload Image (JPG/PNG) or PDF", type=["png", "jpg", "jpeg", "pdf"], key="vector_uploader")
+    uploaded_image = st.file_uploader("Upload Image or PDF", type=["png", "jpg", "jpeg", "pdf"], key="image_pdf_uploader")
 
-    st.markdown("---")
+    if uploaded_image is not None:
+        if uploaded_image.name != st.session_state.uploaded_file_name or st.session_state.current_image_pil is None:
+            try:
+                if uploaded_image.type == "application/pdf":
+                    # Read PDF using PyMuPDF
+                    pdf_document = fitz.open(stream=uploaded_image.getvalue(), filetype="pdf")
+                    # Render the first page as a PNG image
+                    page = pdf_document.load_page(0)  # Load the first page
+                    pix = page.get_pixmap()
+                    img_buffer = io.BytesIO(pix.pil_tobytes(format="PNG"))
+                    st.session_state.current_image_pil = Image.open(img_buffer)
+                    pdf_document.close()
+                else:
+                    st.session_state.current_image_pil = Image.open(uploaded_image)
+                
+                st.session_state.uploaded_file_name = uploaded_image.name
+                st.session_state.last_svg_content = None # Clear previous SVG content
+                st.success(f"File '{uploaded_image.name}' loaded successfully for vectorization.")
+            except Exception as e:
+                st.error(f"Error loading file: {e}. Please ensure it's a valid image or PDF.")
+                st.session_state.current_image_pil = None
+                st.session_state.uploaded_file_name = ""
+        
+        if st.session_state.current_image_pil:
+            st.image(st.session_state.current_image_pil, caption="Uploaded Image/PDF Preview", use_column_width=True)
 
-    if uploaded_file is not None:
-        file_extension = uploaded_file.name.split('.')[-1].lower()
-        st.session_state.uploaded_file_name = uploaded_file.name
-
-        image_to_process = None
-        if file_extension in ["png", "jpg", "jpeg"]:
-            image_to_process = Image.open(uploaded_file)
-        elif file_extension == "pdf":
-            image_to_process = extract_image_from_pdf(uploaded_file)
-
-        if image_to_process:
-            st.session_state.current_image_pil = image_to_process
-            st.success(f"File **{uploaded_file.name}** loaded for conversion.")
-            st.subheader("Image Preview:")
-            st.image(image_to_process, caption="Uploaded Image", use_container_width=True)
+            st.markdown("---")
+            st.markdown("<h3 class='sub-header'>Vectorization Options</h3>", unsafe_allow_html=True)
 
             if st.session_state.gradio_client_ready:
-                if st.button("Convert to SVG", key="convert_to_svg_btn"):
-                    svg_content = convert_image_to_svg(st.session_state.current_image_pil)
-                    if svg_content:
-                        st.session_state.last_svg_content = svg_content
-                        st.download_button(
-                            label="Download SVG",
-                            data=svg_content.encode("utf-8"),
-                            file_name=f"{os.path.splitext(st.session_state.uploaded_file_name)[0]}_vectorized.svg",
-                            mime="image/svg+xml",
-                            key="download_svg_btn"
-                        )
-                        st.info("SVG conversion complete. You can now export to DXF.")
-                    else:
-                        st.error("SVG conversion failed.")
-            else:
-                st.warning("Vectorization services not available. SVG conversion disabled.")
+                col_convert, col_options = st.columns([1, 1])
+                
+                with col_convert:
+                    if st.button("Convert to Vector (SVG/DXF)"):
+                        with st.spinner("Converting... This may take a moment."):
+                            try:
+                                # Save the PIL image to a temporary file for Gradio Client
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_img_file:
+                                    st.session_state.current_image_pil.save(tmp_img_file, format="PNG")
+                                    tmp_img_path = tmp_img_file.name
 
-            if st.session_state.get('last_svg_content'):
-                if st.button("Export to DXF", key="export_to_dxf_btn"):
-                    dxf_bytes = convert_svg_to_dxf(st.session_state.last_svg_content)
-                    if dxf_bytes:
-                        st.download_button(
-                            label="Download DXF",
-                            data=dxf_bytes,
-                            file_name=f"{os.path.splitext(st.session_state.uploaded_file_name)[0]}_vectorized.dxf",
-                            mime="application/dxf",
-                            key="download_dxf_btn"
-                        )
-                    else:
-                        st.error("DXF export failed.")
+                                # Use handle_file to prepare the image for Gradio
+                                gradio_file = handle_file(tmp_img_path)
+
+                                # Call the Gradio API
+                                # Assuming the 'image-to-vector' model has a specific input/output signature.
+                                # You might need to adjust '0' based on the actual API signature.
+                                result = gradio_client.predict(
+                                    gradio_file,
+                                    api_name="/predict" # Or the correct API endpoint if different
+                                )
+                                
+                                os.remove(tmp_img_path) # Clean up temp image file
+
+                                if isinstance(result, str) and result.strip().endswith(".svg"):
+                                    # Result is likely a path to the SVG file
+                                    # Fetch the content if it's a path, or directly use if content
+                                    # For Hugging Face Gradio, result is usually a file path
+                                    with open(result, 'r') as f:
+                                        svg_content = f.read()
+                                    st.session_state.last_svg_content = svg_content
+                                    st.success("Conversion successful!")
+                                    st.download_button(
+                                        label="Download SVG",
+                                        data=svg_content,
+                                        file_name=f"{os.path.splitext(uploaded_image.name)[0]}.svg",
+                                        mime="image/svg+xml",
+                                        key="download_svg_button"
+                                    )
+                                    # Offer DXF conversion if SVG is available (requires a separate service or library)
+                                    st.info("DXF download coming soon! (Requires SVG to DXF conversion logic)")
+                                    
+                                elif isinstance(result, dict) and 'name' in result and result['name'].endswith(".svg"):
+                                    # Handle Gradio's File class output
+                                    file_path = result['name']
+                                    with open(file_path, 'r') as f:
+                                        svg_content = f.read()
+                                    st.session_state.last_svg_content = svg_content
+                                    st.success("Conversion successful!")
+                                    st.download_button(
+                                        label="Download SVG",
+                                        data=svg_content,
+                                        file_name=f"{os.path.splitext(uploaded_image.name)[0]}.svg",
+                                        mime="image/svg+xml",
+                                        key="download_svg_button"
+                                    )
+                                    st.info("DXF download coming soon! (Requires SVG to DXF conversion logic)")
+                                else:
+                                    st.error("Vectorization service returned an unexpected result format.")
+                                    st.json(result) # For debugging: show the raw result
+
+                            except Exception as e:
+                                st.error(f"Error during vectorization: {e}. Please try again.")
+                                st.session_state.last_svg_content = None
             else:
-                st.info("Convert to SVG first to enable DXF export.")
+                st.warning("Vectorization service is not available. Please check your internet connection or the service status.")
+                
+            # Display SVG if available
+            if st.session_state.last_svg_content:
+                st.markdown("---")
+                st.markdown("<h3 class='sub-header'>Vectorized Output Preview (SVG)</h3>", unsafe_allow_html=True)
+                st.components.v1.html(st.session_state.last_svg_content, height=600, scrolling=True)
         else:
-            st.error("Could not process the uploaded file. Please ensure it's a valid image or a single-page PDF.")
-            st.session_state.current_image_pil = None
-            st.session_state.last_svg_content = None
-    else:
-        st.info("Please upload an image or PDF file to get started with vectorization.")
+            st.info("Please upload an image or PDF file to get started with vectorization.")
 
 # --- Main Application Logic ---
 
 def main():
     # --- Full-width Fixed Navbar ---
-    st.markdown(
-    """
+    st.markdown("""
     <div class="navbar">
         <img src="https://github.com/Tailailabs/TAILAI_CAD_Analyzer/blob/main/Tailai_LOGO.jpeg?raw=true" 
              alt="TAILAI Logo" 
@@ -1412,7 +1177,8 @@ def main():
         'chat_history': [{"role": "system", "content": "You are a helpful CAD assistant. Respond concisely and accurately based on the provided DXF data."}],
         'current_image_pil': None,
         'last_svg_content': None,
-        'uploaded_file_name': ""
+        'uploaded_file_name': "",
+        'gradio_client_ready': False # <-- ADDED THIS LINE
     }.items():
         if key not in st.session_state:
             st.session_state[key] = default
@@ -1425,7 +1191,7 @@ def main():
 
 
     # --- Optional Footer (Uncomment if needed) ---
-    st.markdown("<div class='footer'>© 2025 TAILAI LABS PVT LTD. All rights reserved.</div>", unsafe_allow_html=True)
+    st.markdown("""<div class='footer'>© 2025 TAILAI LABS PVT LTD. All rights reserved.</div>""", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
